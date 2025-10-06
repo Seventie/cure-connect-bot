@@ -11,8 +11,8 @@ from groq import Groq
 # -------------------------------
 # 1. Load data and prebuilt embeddings
 # -------------------------------
-# FIX: Use correct sample file names that exist in the repo
-df = pd.read_csv("data/sample_medquad_processed.csv") # preprocessed dataset
+# FIX: Use correct file names that exist in the repo
+df = pd.read_csv("data/medquad_processed.csv") # Use actual processed dataset
 docs = df["answer_clean"].astype(str).tolist()
 
 # FIX: Check if embeddings exist, otherwise use placeholder
