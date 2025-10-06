@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
@@ -8,7 +9,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
 
 // Import route handlers
@@ -23,7 +27,12 @@ app.use('/api/visualizations', visualizationRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV || 'development',
+    port: PORT
+  });
 });
 
 // Serve static files for datasets and embeddings
@@ -48,6 +57,7 @@ app.listen(PORT, () => {
   console.log(`🤖 QA API: http://localhost:${PORT}/api/qa`);
   console.log(`💊 Recommendations API: http://localhost:${PORT}/api/recommend`);
   console.log(`📈 Visualizations API: http://localhost:${PORT}/api/visualizations`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
