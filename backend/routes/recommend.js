@@ -13,6 +13,15 @@ router.post('/medicines', async (req, res) => {
       return res.status(400).json({ error: 'Symptoms are required' });
     }
 
+    // TODO: Replace with actual Python model call
+    // const pythonProcess = spawn('python3', [
+    //   path.join(__dirname, '../../models/medical_v3.py'),
+    //   '--symptoms', symptoms.join(' '),
+    //   '--additional_info', additional_info || '',
+    //   '--question', 'What medicines would you recommend?',
+    //   '--api'
+    // ]);
+
     // Placeholder response for medicine recommendations
     const placeholderResponse = {
       symptoms: symptoms,
@@ -49,19 +58,11 @@ router.post('/medicines', async (req, res) => {
         "Dosage recommendations from clinical data"
       ],
       processing_info: {
-        ner_entities_found: ["fever", "headache", "pain"],
+        ner_entities_found: symptoms,
         kg_nodes_expanded: 15,
         semantic_similarity_score: 0.89
       }
     };
-
-    // TODO: Replace with actual Python model call
-    // const pythonProcess = spawn('python', [
-    //   path.join(__dirname, '../../models/medical_v3.py'),
-    //   '--symptoms', JSON.stringify(symptoms),
-    //   '--additional_info', additional_info || '',
-    //   '--top_k', top_k.toString()
-    // ]);
 
     res.json(placeholderResponse);
   } catch (error) {
@@ -79,44 +80,80 @@ router.get('/search', async (req, res) => {
       return res.status(400).json({ error: 'Search query is required' });
     }
 
-    // Placeholder search results
-    const placeholderResults = {
-      query: q,
-      filter_by: filter_by || 'all',
-      total_results: 156,
-      results: [
+    // Try to load actual data from sample CSV
+    const csvPath = path.join(__dirname, '../../data/sample_drugs_side_effects.csv');
+    let searchResults = [];
+    
+    if (fs.existsSync(csvPath)) {
+      try {
+        const csvContent = fs.readFileSync(csvPath, 'utf8');
+        const lines = csvContent.split('\n').slice(1); // Skip header
+        const query = q.toLowerCase();
+        
+        for (let line of lines) {
+          if (line.trim()) {
+            const [drug_name, medical_condition, side_effects] = line.split(',');
+            
+            const matchesDrug = drug_name && drug_name.toLowerCase().includes(query);
+            const matchesCondition = medical_condition && medical_condition.toLowerCase().includes(query);
+            const matchesSideEffects = side_effects && side_effects.toLowerCase().includes(query);
+            
+            if (matchesDrug || matchesCondition || matchesSideEffects) {
+              searchResults.push({
+                drug_name: drug_name || '',
+                medical_condition: medical_condition || '',
+                side_effects: side_effects || '',
+                match_score: matchesDrug ? 0.95 : (matchesCondition ? 0.85 : 0.75),
+                match_type: matchesDrug ? 'drug_name' : (matchesCondition ? 'condition' : 'side_effect')
+              });
+            }
+          }
+        }
+        
+        // Sort by match score and limit results
+        searchResults = searchResults
+          .sort((a, b) => b.match_score - a.match_score)
+          .slice(0, parseInt(limit));
+          
+      } catch (csvError) {
+        console.warn('Error reading CSV file:', csvError);
+      }
+    }
+    
+    if (searchResults.length === 0) {
+      // Fallback to placeholder results
+      searchResults = [
         {
           drug_name: "Paracetamol",
-          medical_condition: "Fever, Headache, Body aches",
-          side_effects: "Nausea, Vomiting, Constipation",
+          medical_condition: "Fever; Pain relief",
+          side_effects: "Nausea; Vomiting; Liver damage (overdose)",
           match_score: 0.95,
           match_type: "drug_name"
         },
         {
-          drug_name: "Acetaminophen",
-          medical_condition: "Pain, Fever",
-          side_effects: "Liver damage, Skin rash",
-          match_score: 0.92,
+          drug_name: "Ibuprofen",
+          medical_condition: "Pain; Inflammation; Fever",
+          side_effects: "Stomach upset; Dizziness; Heartburn",
+          match_score: 0.85,
           match_type: "condition"
-        },
-        {
-          drug_name: "Tylenol",
-          medical_condition: "Mild to moderate pain",
-          side_effects: "Allergic reactions, Liver problems",
-          match_score: 0.89,
-          match_type: "brand_name"
         }
-      ],
-      search_time: "0.3s"
+      ].filter(item => 
+        item.drug_name.toLowerCase().includes(q.toLowerCase()) ||
+        item.medical_condition.toLowerCase().includes(q.toLowerCase()) ||
+        item.side_effects.toLowerCase().includes(q.toLowerCase())
+      );
+    }
+
+    const response = {
+      query: q,
+      filter_by: filter_by || 'all',
+      total_results: searchResults.length,
+      results: searchResults,
+      search_time: "0.3s",
+      data_source: fs.existsSync(csvPath) ? "sample_drugs_side_effects.csv" : "placeholder_data"
     };
 
-    // TODO: Implement actual search through drugs_side_effects.csv
-    // const csvPath = path.join(__dirname, '../../data/drugs_side_effects.csv');
-    // if (fs.existsSync(csvPath)) {
-    //   // Process CSV and perform search
-    // }
-
-    res.json(placeholderResults);
+    res.json(response);
   } catch (error) {
     console.error('Medicine search error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
@@ -128,38 +165,74 @@ router.get('/drug/:name', async (req, res) => {
   try {
     const { name } = req.params;
     
-    // Placeholder drug details
-    const drugDetails = {
-      drug_name: name,
-      generic_name: "Acetaminophen",
-      brand_names: ["Tylenol", "Panadol", "Calpol"],
-      medical_conditions: [
-        "Fever",
-        "Headache",
-        "Muscle aches",
-        "Arthritis pain",
-        "Toothache"
-      ],
-      side_effects: [
-        "Nausea",
-        "Vomiting",
-        "Constipation",
-        "Liver damage (with overdose)",
-        "Skin rash"
-      ],
-      dosage_info: {
-        adult_dose: "500mg-1000mg every 4-6 hours",
-        max_daily_dose: "4000mg",
-        pediatric_dose: "10-15mg/kg every 4-6 hours"
-      },
-      contraindications: [
-        "Severe liver disease",
-        "Allergy to acetaminophen",
-        "Chronic alcohol use"
-      ],
-      drug_class: "Analgesic, Antipyretic",
-      mechanism: "Inhibits cyclooxygenase enzymes, reducing prostaglandin synthesis"
-    };
+    // Try to find drug in sample data first
+    const csvPath = path.join(__dirname, '../../data/sample_drugs_side_effects.csv');
+    let drugDetails = null;
+    
+    if (fs.existsSync(csvPath)) {
+      try {
+        const csvContent = fs.readFileSync(csvPath, 'utf8');
+        const lines = csvContent.split('\n').slice(1); // Skip header
+        const searchName = name.toLowerCase();
+        
+        for (let line of lines) {
+          if (line.trim()) {
+            const [drug_name, medical_condition, side_effects] = line.split(',');
+            if (drug_name && drug_name.toLowerCase().includes(searchName)) {
+              drugDetails = {
+                drug_name: drug_name,
+                generic_name: drug_name, // Same for now
+                brand_names: [drug_name],
+                medical_conditions: medical_condition ? medical_condition.split(';').map(c => c.trim()) : [],
+                side_effects: side_effects ? side_effects.split(';').map(s => s.trim()) : [],
+                dosage_info: {
+                  adult_dose: "As directed by physician",
+                  max_daily_dose: "Refer to package insert",
+                  pediatric_dose: "Consult pediatrician"
+                },
+                contraindications: [
+                  "Known allergy to this medication",
+                  "Severe organ dysfunction"
+                ],
+                drug_class: "As per medical classification",
+                mechanism: "Refer to pharmacology references",
+                data_source: "sample_drugs_side_effects.csv"
+              };
+              break;
+            }
+          }
+        }
+      } catch (csvError) {
+        console.warn('Error reading CSV file:', csvError);
+      }
+    }
+    
+    if (!drugDetails) {
+      // Fallback to placeholder drug details
+      drugDetails = {
+        drug_name: name,
+        generic_name: name,
+        brand_names: [name],
+        medical_conditions: [
+          "Various conditions as prescribed"
+        ],
+        side_effects: [
+          "Consult healthcare provider for side effects"
+        ],
+        dosage_info: {
+          adult_dose: "As directed by physician",
+          max_daily_dose: "Refer to package insert",
+          pediatric_dose: "Consult pediatrician"
+        },
+        contraindications: [
+          "Known allergies",
+          "Drug interactions"
+        ],
+        drug_class: "Refer to medical references",
+        mechanism: "Consult pharmacology resources",
+        data_source: "placeholder_data"
+      };
+    }
 
     res.json(drugDetails);
   } catch (error) {
@@ -170,10 +243,16 @@ router.get('/drug/:name', async (req, res) => {
 
 // GET /api/recommend/health - Health check for recommendation service
 router.get('/health', (req, res) => {
+  const csvPath = path.join(__dirname, '../../data/sample_drugs_side_effects.csv');
+  const csvExists = fs.existsSync(csvPath);
+  
   res.json({
     service: 'Medicine Recommendation',
     status: 'ready',
     model: 'medical_v3.py (KG + RAG + Groq)',
+    data_files: {
+      drugs_csv: csvExists ? 'sample_drugs_side_effects.csv (found)' : 'sample_drugs_side_effects.csv (missing)'
+    },
     features: [
       'Medicine recommendations',
       'Drug search and filtering',
