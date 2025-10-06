@@ -36,9 +36,9 @@ except ImportError:
 # -------------------------
 # CONFIG - FIXED PATHS
 # -------------------------
-OUT_DIR = Path("kg_rag_artifacts")
-# FIX: Use correct sample file names
-DATA_CSV = "data/sample_drugs_side_effects.csv"
+OUT_DIR = Path("embeddings/kg_rag_artifacts")  # Correct path to artifacts
+# FIX: Use correct file names that exist in repo
+DATA_CSV = "data/drugs_side_effects.csv"  # Use actual drugs dataset
 EMBEDDING_FILE = OUT_DIR / "corpus_embeddings.npy"
 FAISS_INDEX_FILE = OUT_DIR / "faiss.index"
 KG_FILE = OUT_DIR / "medical_kg.graphml"
@@ -108,16 +108,24 @@ else:
 
 # Load FAISS index
 if USE_FAISS and FAISS_INDEX_FILE.exists():
-    dimension = corpus_embeddings.shape[1]
-    index = faiss.IndexFlatIP(dimension)
-    index = faiss.read_index(str(FAISS_INDEX_FILE))
+    try:
+        index = faiss.read_index(str(FAISS_INDEX_FILE))
+        print("[INFO] FAISS index loaded successfully.")
+    except Exception as e:
+        print(f"[WARN] Error loading FAISS index: {e}")
+        index = None
 else:
     index = None
     print("[WARN] FAISS index not loaded. Using brute-force similarity.")
 
 # Load KG
 if KG_FILE.exists():
-    G = nx.read_graphml(KG_FILE)
+    try:
+        G = nx.read_graphml(KG_FILE)
+        print("[INFO] Knowledge graph loaded successfully.")
+    except Exception as e:
+        print(f"[WARN] Error loading knowledge graph: {e}")
+        G = nx.Graph()
 else:
     print("[WARN] Knowledge graph file not found. Creating dummy graph.")
     G = nx.Graph()
@@ -204,8 +212,13 @@ def semantic_retrieve(text, top_k=5):
     
     qv = embedder.encode([clean_text(text)], convert_to_numpy=True, normalize_embeddings=True)
     if USE_FAISS and index is not None:
-        D,I=index.search(qv.astype("float32"), top_k)
-        indices = I[0].tolist()
+        try:
+            D,I=index.search(qv.astype("float32"), top_k)
+            indices = I[0].tolist()
+        except Exception as e:
+            print(f"[WARN] FAISS search error: {e}")
+            sims=cosine_similarity(qv, corpus_embeddings)[0]
+            indices = sims.argsort()[-top_k:][::-1].tolist()
     else:
         sims=cosine_similarity(qv, corpus_embeddings)[0]
         indices = sims.argsort()[-top_k:][::-1].tolist()
