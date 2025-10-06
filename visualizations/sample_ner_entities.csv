@@ -1,0 +1,21 @@
+text,label,start_pos,end_pos,confidence,source_doc
+paracetamol,DRUG,15,26,0.98,drug_description_001
+fever,SYMPTOM,45,50,0.95,condition_text_045
+hypertension,CONDITION,78,90,0.97,medical_record_123
+ibuprofen,DRUG,12,21,0.96,medication_list_067
+headache,SYMPTOM,34,42,0.89,patient_complaint_089
+diabetes,CONDITION,56,64,0.99,diagnosis_report_156
+aspirin,DRUG,23,30,0.94,prescription_note_234
+nausea,SIDE_EFFECT,67,73,0.92,adverse_events_145
+500mg,DOSAGE,89,94,0.88,dosage_instructions_012
+asthma,CONDITION,45,51,0.96,respiratory_assessment_178
+amoxicillin,DRUG,34,46,0.97,antibiotic_therapy_089
+vomiting,SIDE_EFFECT,78,86,0.91,side_effects_report_234
+10ml,DOSAGE,123,127,0.85,liquid_medication_067
+chest pain,SYMPTOM,45,55,0.93,emergency_visit_156
+heart failure,CONDITION,67,80,0.98,cardiology_consult_345
+metformin,DRUG,12,21,0.99,diabetes_treatment_123
+dizziness,SIDE_EFFECT,89,98,0.87,patient_feedback_456
+250mg twice daily,DOSAGE,45,62,0.91,prescription_details_789
+shortness of breath,SYMPTOM,123,142,0.94,pulmonary_exam_234
+high blood pressure,CONDITION,56,76,0.96,vital_signs_record_567
