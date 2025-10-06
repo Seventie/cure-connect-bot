@@ -23,15 +23,7 @@ if %errorlevel% neq 0 (
 echo ✅ Python and Node.js found
 echo.
 
-REM Create Python virtual environment
-echo 🔄 Creating Python virtual environment...
-if not exist ".venv" (
-    python -m venv .venv
-)
 
-REM Activate virtual environment
-echo 🔄 Activating virtual environment...
-call .venv\Scripts\activate.bat
 
 REM Install Python dependencies
 echo 🔄 Installing Python dependencies...
