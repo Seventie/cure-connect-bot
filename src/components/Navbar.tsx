@@ -9,6 +9,7 @@ const Navbar = () => {
     { path: "/medical-qa", label: "Medical Q&A" },
     { path: "/medicine-search", label: "Medicine Search" },
     { path: "/recommendations", label: "Recommendations" },
+    { path: "/visualizations", label: "Visualizations" },
   ];
 
   return (

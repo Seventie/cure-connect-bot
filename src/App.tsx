@@ -7,6 +7,7 @@ import Home from "./pages/Home";
 import MedicalQA from "./pages/MedicalQA";
 import MedicineSearch from "./pages/MedicineSearch";
 import MedicineRecommendation from "./pages/MedicineRecommendation";
+import Visualizations from "./pages/Visualizations";
 import NotFound from "./pages/NotFound";
 import Navbar from "./components/Navbar";
 
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/medical-qa" element={<MedicalQA />} />
           <Route path="/medicine-search" element={<MedicineSearch />} />
           <Route path="/recommendations" element={<MedicineRecommendation />} />
+          <Route path="/visualizations" element={<Visualizations />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

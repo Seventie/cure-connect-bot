@@ -112,6 +112,86 @@ Backend (To Be Created by You)
 
 ---
 
+### 4. Named Entity Recognition (NER)
+
+**Endpoint:** `GET /api/visualizations/ner`
+
+**Response:**
+```json
+[
+  {
+    "text": "Paracetamol",
+    "label": "DRUG",
+    "start": 0,
+    "end": 11
+  },
+  {
+    "text": "fever",
+    "label": "SYMPTOM",
+    "start": 25,
+    "end": 30
+  }
+]
+```
+
+**Update in:** `src/services/api.ts` - `getNEREntities()` function
+
+---
+
+### 5. Knowledge Graph
+
+**Endpoint:** `GET /api/visualizations/kg`
+
+**Response:**
+```json
+{
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Paracetamol",
+      "type": "drug"
+    },
+    {
+      "id": "2",
+      "label": "Fever",
+      "type": "condition"
+    }
+  ],
+  "edges": [
+    {
+      "source": "1",
+      "target": "2",
+      "relation": "treats"
+    }
+  ]
+}
+```
+
+**Update in:** `src/services/api.ts` - `getKnowledgeGraph()` function
+
+---
+
+### 6. Embeddings Visualization
+
+**Endpoint:** `GET /api/visualizations/embeddings`
+
+**Response:**
+```json
+[
+  {
+    "id": "1",
+    "name": "Paracetamol",
+    "x": 10.5,
+    "y": 20.3,
+    "category": "Pain relievers"
+  }
+]
+```
+
+**Update in:** `src/services/api.ts` - `getEmbeddings()` function
+
+---
+
 ## How to Connect Your Backend
 
 ### Step 1: Create Backend Server
@@ -131,11 +211,13 @@ app.use(express.json());
 const qaRoutes = require('./routes/qaRoutes');
 const recommendationRoutes = require('./routes/recommendationRoutes');
 const dataRoutes = require('./routes/dataRoutes');
+const visualizationRoutes = require('./routes/visualizationRoutes');
 
 // Use routes
 app.use('/api/qa', qaRoutes);
 app.use('/api/recommendations', recommendationRoutes);
 app.use('/api/medicines', dataRoutes);
+app.use('/api/visualizations', visualizationRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
@@ -208,6 +290,103 @@ router.get('/search', (req, res) => {
   );
   res.json(results);
 });
+```
+
+### Step 5: Add Visualization Routes
+
+Create visualization endpoints for NER, KG, and embeddings:
+
+```javascript
+// routes/visualizationRoutes.js
+const express = require('express');
+const router = express.Router();
+const fs = require('fs');
+const csv = require('csv-parser');
+
+// Load NER entities from precomputed file
+router.get('/ner', async (req, res) => {
+  try {
+    const entities = [];
+    fs.createReadStream('visualizations/ner_entities.csv')
+      .pipe(csv())
+      .on('data', (row) => entities.push(row))
+      .on('end', () => res.json(entities));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load NER data' });
+  }
+});
+
+// Load Knowledge Graph from GraphML or JSON
+router.get('/kg', async (req, res) => {
+  try {
+    const kgData = JSON.parse(
+      fs.readFileSync('visualizations/medical_kg.json', 'utf8')
+    );
+    res.json(kgData);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load Knowledge Graph' });
+  }
+});
+
+// Load embeddings for visualization
+router.get('/embeddings', async (req, res) => {
+  try {
+    // You'll need to convert .npy to JSON or use a Python service
+    // Example: Call Python script to read .npy and return JSON
+    const { spawn } = require('child_process');
+    const python = spawn('python', ['utils/load_embeddings.py']);
+    
+    let dataString = '';
+    python.stdout.on('data', (data) => {
+      dataString += data.toString();
+    });
+    
+    python.on('close', (code) => {
+      if (code === 0) {
+        res.json(JSON.parse(dataString));
+      } else {
+        res.status(500).json({ error: 'Failed to load embeddings' });
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load embeddings' });
+  }
+});
+
+module.exports = router;
+```
+
+### Step 6: Python Utility to Load Embeddings
+
+Create a Python script to load .npy files:
+
+```python
+# utils/load_embeddings.py
+import numpy as np
+import json
+import sys
+from sklearn.decomposition import PCA
+
+# Load embeddings
+embeddings = np.load('embeddings/encoded_docs.npy')
+
+# Reduce to 2D for visualization
+pca = PCA(n_components=2)
+embeddings_2d = pca.fit_transform(embeddings)
+
+# Create output with medicine names
+# You'll need to match indices to medicine names from your dataset
+output = []
+for i, (x, y) in enumerate(embeddings_2d):
+    output.append({
+        'id': str(i),
+        'name': f'Medicine {i}',  # Replace with actual names
+        'x': float(x),
+        'y': float(y),
+        'category': 'General'  # Add actual categories
+    })
+
+print(json.dumps(output))
 ```
 
 ## Environment Variables
