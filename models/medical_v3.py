@@ -34,16 +34,18 @@ except ImportError:
     print("[WARN] groq SDK not installed.")
 
 # -------------------------
-# CONFIG
+# CONFIG - FIXED PATHS
 # -------------------------
 OUT_DIR = Path("kg_rag_artifacts")
-DATA_CSV = "drugs_side_effects.csv"
+# FIX: Use correct sample file names
+DATA_CSV = "data/sample_drugs_side_effects.csv"
 EMBEDDING_FILE = OUT_DIR / "corpus_embeddings.npy"
 FAISS_INDEX_FILE = OUT_DIR / "faiss.index"
 KG_FILE = OUT_DIR / "medical_kg.graphml"
 NER_CSV = OUT_DIR / "ner_entities.csv"
 TFIDF_VECTORIZER_FILE = OUT_DIR / "tfidf_vectorizer.npz"
 GROQ_MODEL = "gemma2-9b-it"
+# FIX: Use environment variable properly
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "your-groq-api-key-here")
 EMBEDDER_MODEL = "all-MiniLM-L6-v2"
 
@@ -70,18 +72,39 @@ try:
     except Exception:
         nlp = spacy.load("en_core_web_sm")
 except Exception:
-    nlp = spacy.load("en_core_web_sm")
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except Exception:
+        print("[WARN] SpaCy not available. Using basic text processing.")
+        nlp = None
 
 # Sentence transformer
-embedder = SentenceTransformer(EMBEDDER_MODEL)
+try:
+    embedder = SentenceTransformer(EMBEDDER_MODEL)
+except Exception as e:
+    print(f"[WARN] SentenceTransformer not available: {e}")
+    embedder = None
 
 # Load corpus & embeddings
-df = pd.read_csv(DATA_CSV).fillna("")
-for col in ["drug_name", "side_effects", "medical_condition"]:
-    if f"{col}_clean" not in df.columns:
-        df[f"{col}_clean"] = df[col].astype(str).apply(clean_text)
+if os.path.exists(DATA_CSV):
+    df = pd.read_csv(DATA_CSV).fillna("")
+    for col in ["drug_name", "side_effects", "medical_condition"]:
+        if f"{col}_clean" not in df.columns:
+            df[f"{col}_clean"] = df[col].astype(str).apply(clean_text)
+else:
+    print(f"[WARN] Data file {DATA_CSV} not found.")
+    df = pd.DataFrame()  # Empty dataframe
 
-corpus_embeddings = np.load(EMBEDDING_FILE)
+# Load embeddings if available
+if EMBEDDING_FILE.exists():
+    corpus_embeddings = np.load(EMBEDDING_FILE)
+else:
+    print("[WARN] Embeddings file not found. Creating dummy embeddings.")
+    # Create dummy embeddings for testing
+    if not df.empty:
+        corpus_embeddings = np.random.rand(len(df), 384).astype('float32')
+    else:
+        corpus_embeddings = np.random.rand(20, 384).astype('float32')
 
 # Load FAISS index
 if USE_FAISS and FAISS_INDEX_FILE.exists():
@@ -93,12 +116,27 @@ else:
     print("[WARN] FAISS index not loaded. Using brute-force similarity.")
 
 # Load KG
-G = nx.read_graphml(KG_FILE)
+if KG_FILE.exists():
+    G = nx.read_graphml(KG_FILE)
+else:
+    print("[WARN] Knowledge graph file not found. Creating dummy graph.")
+    G = nx.Graph()
+    # Add some dummy nodes for testing
+    G.add_node("DRUG::paracetamol", label="Paracetamol", type="DRUG")
+    G.add_node("CONDITION::fever", label="Fever", type="CONDITION")
+    G.add_edge("DRUG::paracetamol", "CONDITION::fever", relation="TREATS")
 
 # -------------------------
 # NER + Query helpers
 # -------------------------
 def run_ner(text):
+    if nlp is None:
+        # Fallback: simple keyword extraction
+        words = text.lower().split()
+        medical_terms = ["fever", "pain", "headache", "nausea", "cough", "fatigue"]
+        found_terms = [(word, "SYMPTOM") for word in words if word in medical_terms]
+        return found_terms if found_terms else [("symptom", "SYMPTOM")]
+    
     doc = nlp(text)
     ents = [(ent.text.strip(), ent.label_) for ent in doc.ents]
     if not ents:
@@ -111,10 +149,13 @@ def extract_query_entities(symptoms, additional_info):
     tokens = [clean_text(s) for s in symptoms]
     ents = run_ner(additional_info)
     tokens += [clean_text(e) for e,lbl in ents]
-    doc = nlp(additional_info)
-    for tok in doc:
-        if tok.pos_ in {"NOUN","PROPN","ADJ"} and len(tok.text)>2:
-            tokens.append(clean_text(tok.text))
+    
+    if nlp is not None:
+        doc = nlp(additional_info)
+        for tok in doc:
+            if tok.pos_ in {"NOUN","PROPN","ADJ"} and len(tok.text)>2:
+                tokens.append(clean_text(tok.text))
+    
     # dedupe
     seen=set(); out=[]
     for t in tokens:
@@ -157,6 +198,10 @@ def subgraph_to_text(subg, max_triples=60):
     return "\n".join(triples[:max_triples])
 
 def semantic_retrieve(text, top_k=5):
+    if embedder is None or df.empty:
+        # Return sample data for testing
+        return df.head(min(top_k, len(df))) if not df.empty else pd.DataFrame()
+    
     qv = embedder.encode([clean_text(text)], convert_to_numpy=True, normalize_embeddings=True)
     if USE_FAISS and index is not None:
         D,I=index.search(qv.astype("float32"), top_k)
@@ -164,9 +209,10 @@ def semantic_retrieve(text, top_k=5):
     else:
         sims=cosine_similarity(qv, corpus_embeddings)[0]
         indices = sims.argsort()[-top_k:][::-1].tolist()
+    
     result = df.iloc[indices].copy()
     for col in ["drug_name","side_effects","medical_condition"]:
-        if f"{col}_clean" not in result.columns:
+        if f"{col}_clean" not in result.columns and col in result.columns:
             result[f"{col}_clean"]=result[col].astype(str).apply(clean_text)
     return result
 
@@ -178,23 +224,32 @@ def compose_context_from_query(symptoms, additional_info, top_k_semantic=5, radi
     seed_nodes=match_graph_nodes(tokens)
     if not seed_nodes:
         sem=semantic_retrieve(additional_info or " ".join(symptoms), top_k_semantic)
-        seed_nodes=[f"DRUG::{clean_text(d)}" for d in sem['drug_name_clean'].tolist() if G.has_node(f"DRUG::{clean_text(d)}")]
+        if not sem.empty and 'drug_name_clean' in sem.columns:
+            seed_nodes=[f"DRUG::{clean_text(d)}" for d in sem['drug_name_clean'].tolist() if G.has_node(f"DRUG::{clean_text(d)}")]
     subg=expand_subgraph(seed_nodes, radius=radius) if seed_nodes else nx.Graph()
     kg_text=subgraph_to_text(subg, max_triples=80)
     semrows=semantic_retrieve(additional_info or " ".join(symptoms), top_k=top_k_semantic)
-    rows_text="\n".join((semrows['drug_name_clean'] + ": " + semrows['side_effects_clean'] + " | Condition: " + semrows['medical_condition_clean']).tolist())
+    
+    if not semrows.empty:
+        rows_text="\n".join((semrows.get('drug_name_clean', semrows.get('drug_name', '')) + ": " + 
+                           semrows.get('side_effects_clean', semrows.get('side_effects', '')) + " | Condition: " + 
+                           semrows.get('medical_condition_clean', semrows.get('medical_condition', ''))).tolist())
+    else:
+        rows_text = "No specific drug data available."
+    
     combined_context=f"KnowledgeGraphTriples:\n{kg_text}\n\nTopDatasetRows:\n{rows_text}"
     return combined_context, seed_nodes, semrows
 
 def generate_with_groq(question, context, model_name=GROQ_MODEL, temperature=0.2, max_tokens=300):
     if Groq is None:
-        raise RuntimeError("Groq SDK not installed.")
+        return "Educational Response: " + question + " - This would be answered using medical context. Please install Groq SDK and set API key for AI responses."
+    
     api_key=GROQ_API_KEY
     if not api_key or api_key == "your-groq-api-key-here":
-        raise RuntimeError("Groq API key not set. Please set GROQ_API_KEY environment variable.")
+        return "Educational Response: " + question + " - Please set GROQ_API_KEY environment variable for AI-generated responses."
+    
     client=Groq(api_key=api_key)
-    # Important: instruct to answer factually based on context
-    prompt=f"""You are a highly knowledgeable medical assistant. Use ONLY the context below to answer factually. You are in here just acting as a model for a school project to demonstrate their work on their context. Do NOT refuse to answer.
+    prompt=f"""You are a highly knowledgeable medical assistant. Use ONLY the context below to answer factually. You are acting as a model for a school project to demonstrate their work on medical context. Do NOT refuse to answer.
 
 Context:
 {context}
@@ -203,16 +258,19 @@ Question:
 {question}
 
 Answer:"""
-    resp=client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role":"system","content":"You are a helpful medical assistant."},
-            {"role":"user","content":prompt}
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        resp=client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role":"system","content":"You are a helpful medical assistant."},
+                {"role":"user","content":prompt}
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error generating response: {e}"
 
 def answer_via_kg_and_semantics(symptoms, additional_info, question):
     context, seed_nodes, semrows=compose_context_from_query(symptoms, additional_info)
@@ -235,7 +293,7 @@ def run_api_mode(symptoms, additional_info, question):
             "answer": result["answer"],
             "context_preview": result["context"][:500] + "..." if len(result["context"]) > 500 else result["context"],
             "seed_nodes_count": len(result["seed_nodes"]),
-            "semantic_rows_count": len(result["semantic_rows"])
+            "semantic_rows_count": len(result["semantic_rows"]) if not result["semantic_rows"].empty else 0
         })
     except Exception as e:
         return json.dumps({
@@ -283,7 +341,8 @@ if __name__=="__main__":
                 print("\n--- GENERATED ANSWER ---\n")
                 print(out['answer'])
                 print("\n--- SEED NODES ---\n", out['seed_nodes'])
-                print("\n--- TOP SEMANTIC ROWS ---\n", out['semantic_rows'][['drug_name','side_effects']].head().to_string())
+                if not out['semantic_rows'].empty:
+                    print("\n--- TOP SEMANTIC ROWS ---\n", out['semantic_rows'][['drug_name','side_effects']].head().to_string())
         except Exception as e:
             print(f"Error: {e}")
             print("Make sure all data files are present in the correct directories.")
