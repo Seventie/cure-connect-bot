@@ -11,39 +11,69 @@ from groq import Groq
 # -------------------------------
 # 1. Load data and prebuilt embeddings
 # -------------------------------
-df = pd.read_csv("data/medquad_processed.csv") # preprocessed dataset
+# FIX: Use correct sample file names that exist in the repo
+df = pd.read_csv("data/sample_medquad_processed.csv") # preprocessed dataset
 docs = df["answer_clean"].astype(str).tolist()
-encoded_docs = np.load("embeddings/encoded_docs.npy")
-encoded_docs = encoded_docs / np.linalg.norm(encoded_docs, axis=1, keepdims=True)
-dimension = encoded_docs.shape[1]
-index = faiss.IndexFlatIP(dimension)
-index.add(encoded_docs)
-print("[INFO] FAISS index built successfully (in-memory).")
+
+# FIX: Check if embeddings exist, otherwise use placeholder
+embeddings_path = "embeddings/encoded_docs.npy"
+if os.path.exists(embeddings_path):
+    encoded_docs = np.load(embeddings_path)
+    encoded_docs = encoded_docs / np.linalg.norm(encoded_docs, axis=1, keepdims=True)
+    dimension = encoded_docs.shape[1]
+    index = faiss.IndexFlatIP(dimension)
+    index.add(encoded_docs)
+    print("[INFO] FAISS index built successfully (in-memory).")
+else:
+    print("[WARN] Embeddings file not found. Please add your encoded_docs.npy file.")
+    # Create dummy embeddings for testing
+    dimension = 768
+    encoded_docs = np.random.rand(len(docs), dimension).astype('float32')
+    encoded_docs = encoded_docs / np.linalg.norm(encoded_docs, axis=1, keepdims=True)
+    index = faiss.IndexFlatIP(dimension)
+    index.add(encoded_docs)
+    print("[INFO] Using dummy embeddings for testing.")
 
 # -------------------------------
 # 2. Load DPR encoders
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("[INIT] Loading DPR encoders...")
-question_encoder = DPRQuestionEncoder.from_pretrained(
-    "facebook/dpr-question_encoder-single-nq-base"
-).to(device)
-question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained(
-    "facebook/dpr-question_encoder-single-nq-base"
-)
-print("[INFO] DPR encoders loaded successfully.")
+try:
+    question_encoder = DPRQuestionEncoder.from_pretrained(
+        "facebook/dpr-question_encoder-single-nq-base"
+    ).to(device)
+    question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained(
+        "facebook/dpr-question_encoder-single-nq-base"
+    )
+    print("[INFO] DPR encoders loaded successfully.")
+except Exception as e:
+    print(f"[WARN] DPR models not available: {e}")
+    question_encoder = None
+    question_tokenizer = None
 
 # -------------------------------
 # 3. Setup Groq client
 # -------------------------------
 api_key = os.getenv("GROQ_API_KEY", "your-groq-api-key-here")
-client = Groq(api_key=api_key)
+client = Groq(api_key=api_key) if api_key != "your-groq-api-key-here" else None
 
 # -------------------------------
 # 4. Helper functions
 # -------------------------------
 def retrieve_context(question: str, top_k: int = 5):
     """Retrieve top-k relevant contexts using FAISS."""
+    if question_encoder is None or question_tokenizer is None:
+        # Fallback to simple text matching
+        relevant_docs = []
+        question_lower = question.lower()
+        for i, doc in enumerate(docs):
+            if any(word in doc.lower() for word in question_lower.split()):
+                relevant_docs.append(doc)
+                if len(relevant_docs) >= top_k:
+                    break
+        return " ".join(relevant_docs[:top_k]) if relevant_docs else docs[0]
+    
     inputs = question_tokenizer(
         question, return_tensors="pt", truncation=True, max_length=512
     ).to(device)
@@ -56,6 +86,9 @@ def retrieve_context(question: str, top_k: int = 5):
 
 def generate_answer_groq(question: str, context: str) -> str:
     """Generate factual medical answer using Groq model."""
+    if client is None:
+        return f"Educational Answer: Based on the context about '{question}', this would typically involve medical information from our dataset. Please set your GROQ_API_KEY to get AI-generated responses."
+    
     prompt = f"""
 You are a knowledgeable medical assistant designed for educational and informational purposes only.
 Your task is to provide clear, factually accurate, and educational answers.
