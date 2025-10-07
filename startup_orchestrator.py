@@ -105,6 +105,47 @@ class StartupOrchestrator:
             print(f"[ORCHESTRATOR] Error: Node.js not available - {e}")
             return False
         
+        # Check if npm is available
+        try:
+            result = subprocess.run(['npm', '--version'], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"[ORCHESTRATOR] npm available: {result.stdout.strip()}")
+            else:
+                raise Exception("npm not found")
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Error: npm not available - {e}")
+            return False
+        
+        # Check if backend dependencies are installed
+        backend_node_modules = Path("backend/node_modules")
+        if not backend_node_modules.exists():
+            print("[ORCHESTRATOR] Warning: Backend dependencies not installed")
+            print("[ORCHESTRATOR] Installing backend dependencies...")
+            try:
+                result = subprocess.run(['npm', 'install'], cwd='backend', capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"[ORCHESTRATOR] Error installing backend dependencies: {result.stderr}")
+                    return False
+                print("[ORCHESTRATOR] Backend dependencies installed successfully")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] Error: Could not install backend dependencies - {e}")
+                return False
+        
+        # Check if frontend dependencies are installed
+        frontend_node_modules = Path("node_modules")
+        if not frontend_node_modules.exists():
+            print("[ORCHESTRATOR] Warning: Frontend dependencies not installed")
+            print("[ORCHESTRATOR] Installing frontend dependencies...")
+            try:
+                result = subprocess.run(['npm', 'install'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"[ORCHESTRATOR] Error installing frontend dependencies: {result.stderr}")
+                    return False
+                print("[ORCHESTRATOR] Frontend dependencies installed successfully")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] Error: Could not install frontend dependencies - {e}")
+                return False
+        
         # Check if Flask is available
         try:
             result = subprocess.run(['python', '-c', 'import flask; print(flask.__version__)'], 
@@ -207,6 +248,16 @@ class StartupOrchestrator:
             env['REC_SERVER_URL'] = 'http://localhost:5002' 
             env['VIZ_SERVER_URL'] = 'http://localhost:5003'
             
+            # Check if package.json exists
+            package_json = Path(BACKEND_SERVER['cwd']) / 'package.json'
+            if not package_json.exists():
+                raise Exception(f"Backend package.json not found at {package_json}")
+            
+            # Check if node_modules exists
+            node_modules = Path(BACKEND_SERVER['cwd']) / 'node_modules'
+            if not node_modules.exists():
+                raise Exception(f"Backend dependencies not installed. Run: cd {BACKEND_SERVER['cwd']} && npm install")
+            
             process = subprocess.Popen(
                 BACKEND_SERVER['command'],
                 cwd=BACKEND_SERVER['cwd'],
@@ -239,6 +290,16 @@ class StartupOrchestrator:
         print("[ORCHESTRATOR] Starting frontend server...")
         
         try:
+            # Check if package.json exists
+            package_json = Path('package.json')
+            if not package_json.exists():
+                raise Exception("Frontend package.json not found")
+            
+            # Check if node_modules exists
+            node_modules = Path('node_modules')
+            if not node_modules.exists():
+                raise Exception("Frontend dependencies not installed. Run: npm install")
+            
             process = subprocess.Popen(
                 FRONTEND_SERVER['command'],
                 cwd=FRONTEND_SERVER['cwd'],
@@ -391,6 +452,11 @@ def main():
     
     if not success:
         print("[ORCHESTRATOR] Application startup failed")
+        print("\n🔧 Quick Fix Steps:")
+        print("1. Install backend dependencies: cd backend && npm install")
+        print("2. Install frontend dependencies: npm install")
+        print("3. Install Python dependencies: pip install -r requirements.txt")
+        print("4. Try running again: python startup_orchestrator.py")
         sys.exit(1)
     else:
         print("[ORCHESTRATOR] Application shutdown complete")
