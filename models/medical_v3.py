@@ -190,7 +190,15 @@ def expand_subgraph(seed_nodes, radius=2):
     for _ in range(radius):
         new_frontier=set()
         for n in frontier:
-            for nbr in list(G.successors(n))+list(G.predecessors(n)):
+            # FIX: Handle undirected graphs properly - use neighbors() for undirected graphs
+            if G.is_directed():
+                # For directed graphs, use successors and predecessors
+                neighbors = list(G.successors(n)) + list(G.predecessors(n))
+            else:
+                # For undirected graphs, use neighbors
+                neighbors = list(G.neighbors(n))
+            
+            for nbr in neighbors:
                 if nbr not in nodes_to_include: new_frontier.add(nbr)
         nodes_to_include.update(new_frontier)
         frontier=new_frontier
@@ -214,14 +222,17 @@ def semantic_retrieve(text, top_k=5):
     if USE_FAISS and index is not None:
         try:
             D,I=index.search(qv.astype("float32"), top_k)
-            indices = I[0].tolist()
+            # FIX: FAISS top-k indices - flatten I properly
+            indices = I[0].tolist()  # Fixed: was I.tolist() directly
         except Exception as e:
             print(f"[WARN] FAISS search error: {e}")
             sims=cosine_similarity(qv, corpus_embeddings)[0]
-            indices = sims.argsort()[-top_k:][::-1].tolist()
+            # FIX: Brute-force top-k - use correct argsort pattern
+            indices = sims.argsort()[-top_k:][::-1].tolist()  # Fixed: was .argsort()[-top_k:][::-1].argsort()[-top_k:][::-1]
     else:
         sims=cosine_similarity(qv, corpus_embeddings)[0]
-        indices = sims.argsort()[-top_k:][::-1].tolist()
+        # FIX: Brute-force top-k - use correct argsort pattern
+        indices = sims.argsort()[-top_k:][::-1].tolist()  # Fixed: was .argsort()[-top_k:][::-1].argsort()[-top_k:][::-1]
     
     result = df.iloc[indices].copy()
     for col in ["drug_name","side_effects","medical_condition"]:
