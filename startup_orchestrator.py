@@ -84,7 +84,12 @@ class StartupOrchestrator:
             if result.returncode == 0:
                 print(f"[ORCHESTRATOR] Python available: {result.stdout.strip()}")
             else:
-                raise Exception("Python not found")
+                # Try python3
+                result = subprocess.run(['python3', '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"[ORCHESTRATOR] Python3 available: {result.stdout.strip()}")
+                else:
+                    raise Exception("Python not found")
         except Exception as e:
             print(f"[ORCHESTRATOR] Error: Python not available - {e}")
             return False
@@ -100,6 +105,23 @@ class StartupOrchestrator:
             print(f"[ORCHESTRATOR] Error: Node.js not available - {e}")
             return False
         
+        # Check if Flask is available
+        try:
+            result = subprocess.run(['python', '-c', 'import flask; print(flask.__version__)'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"[ORCHESTRATOR] Flask available: {result.stdout.strip()}")
+            else:
+                # Try with python3
+                result = subprocess.run(['python3', '-c', 'import flask; print(flask.__version__)'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"[ORCHESTRATOR] Flask available: {result.stdout.strip()}")
+                else:
+                    print("[ORCHESTRATOR] Warning: Flask not available. Run: pip install flask flask-cors")
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Warning: Could not check Flask: {e}")
+        
         print("[ORCHESTRATOR] Prerequisites check completed")
         return True
     
@@ -112,8 +134,15 @@ class StartupOrchestrator:
             env = os.environ.copy()
             env[f'{name.upper()}_PORT'] = str(config['port'])
             
+            # Try python first, then python3
+            python_cmd = 'python'
+            try:
+                subprocess.run(['python', '--version'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                python_cmd = 'python3'
+            
             process = subprocess.Popen(
-                ['python', config['script']],
+                [python_cmd, config['script']],
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -138,7 +167,7 @@ class StartupOrchestrator:
             print(f"[ORCHESTRATOR] Failed to start {name}: {e}")
             return False
     
-    def _wait_for_server_ready(self, name, port, health_endpoint, timeout=120):
+    def _wait_for_server_ready(self, name, port, health_endpoint, timeout=180):
         """Wait for a server to become ready"""
         print(f"[ORCHESTRATOR] Waiting for {name} to be ready on port {port}...")
         
@@ -148,16 +177,21 @@ class StartupOrchestrator:
                 return False
                 
             try:
-                response = requests.get(f"http://localhost:{port}{health_endpoint}", timeout=5)
+                response = requests.get(f"http://localhost:{port}{health_endpoint}", timeout=10)
                 if response.status_code == 200:
                     data = response.json()
-                    if data.get('status') in ['ready', 'operational', 'OK']:
+                    status = data.get('status', 'unknown')
+                    if status in ['ready', 'operational', 'OK']:
                         print(f"[ORCHESTRATOR] ✅ {name} is ready!")
                         return True
-            except requests.exceptions.RequestException:
-                pass
+                    elif status == 'initializing':
+                        print(f"[ORCHESTRATOR] {name} is still initializing...")
+                    else:
+                        print(f"[ORCHESTRATOR] {name} status: {status}")
+            except requests.exceptions.RequestException as e:
+                print(f"[ORCHESTRATOR] {name} not ready yet: {e}")
             
-            time.sleep(2)
+            time.sleep(5)
         
         print(f"[ORCHESTRATOR] ❌ {name} failed to become ready within {timeout}s")
         return False
@@ -240,8 +274,9 @@ class StartupOrchestrator:
                 print(f"[ORCHESTRATOR] Stopping {name}...")
                 try:
                     process.terminate()
-                    process.wait(timeout=5)
+                    process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
+                    print(f"[ORCHESTRATOR] Force killing {name}...")
                     process.kill()
                 except Exception as e:
                     print(f"[ORCHESTRATOR] Error stopping {name}: {e}")
@@ -262,16 +297,16 @@ class StartupOrchestrator:
             print("\n[ORCHESTRATOR] Phase 1: Starting AI Model Servers...")
             print("-" * 50)
             
-            model_servers_ready = True
+            model_servers_started = True
             for name, config in MODEL_SERVERS.items():
                 if not self._start_model_server(name, config):
-                    model_servers_ready = False
+                    model_servers_started = False
                     break
                 
                 # Give the server a moment to start
-                time.sleep(3)
+                time.sleep(5)
             
-            if not model_servers_ready:
+            if not model_servers_started:
                 print("[ORCHESTRATOR] Failed to start model servers")
                 return False
             
@@ -298,7 +333,7 @@ class StartupOrchestrator:
             if not self._start_backend_server():
                 return False
             
-            time.sleep(5)  # Give backend time to start
+            time.sleep(10)  # Give backend time to start
             
             if not self._wait_for_server_ready('backend', BACKEND_SERVER['port'], BACKEND_SERVER['health_endpoint'], timeout=60):
                 print("[ORCHESTRATOR] Backend server failed to start")
@@ -312,7 +347,7 @@ class StartupOrchestrator:
                 return False
             
             # Wait a bit for frontend to start
-            time.sleep(10)
+            time.sleep(15)
             
             # Step 6: Application is ready!
             print("\n" + "="*80)
