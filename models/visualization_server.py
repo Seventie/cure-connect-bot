@@ -1,466 +1,416 @@
 #!/usr/bin/env python3
 """
-Dedicated Visualization Server
-Runs as a separate process to handle data visualizations
+Visualization Server - HTTP wrapper for visualization data
+Provides REST API endpoints for medical visualizations
 """
 
 import os
 import sys
 import json
-import time
-from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.append(str(project_root))
-
-# Environment setup
-from dotenv import load_dotenv
-load_dotenv()
-
-# Core imports
-import numpy as np
+import logging
 import pandas as pd
+import numpy as np
+from pathlib import Path
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import threading
+import time
 
-# Optional imports with fallbacks
-try:
-    import networkx as nx
-    NETWORKX_AVAILABLE = True
-except ImportError:
-    NETWORKX_AVAILABLE = False
+app = Flask(__name__)
+CORS(app)
 
-try:
-    from sklearn.decomposition import PCA
-    from sklearn.manifold import TSNE
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-try:
-    import spacy
-    SPACY_AVAILABLE = True
-except ImportError:
-    SPACY_AVAILABLE = False
+# Global variables
+ner_data = None
+viz_data = None
+initialization_status = {"status": "initializing", "message": "Loading visualization data..."}
 
-class VisualizationServer:
-    def __init__(self, port=5003):
-        self.port = port
-        self.is_ready = False
-        self.ner_data = []
-        self.knowledge_graph = None
-        self.embeddings = None
-        self.medical_data = []
-        
-        # Initialize the visualization system
-        self._initialize_system()
+def initialize_visualization_system():
+    """Initialize the visualization system in a separate thread"""
+    global ner_data, viz_data, initialization_status
     
-    def _initialize_system(self):
-        """Initialize all visualization system components"""
-        print("[VIZ_SERVER] Starting Visualization System initialization...")
+    try:
+        logger.info("[VIZ_SERVER] Starting visualization system initialization...")
+        initialization_status = {"status": "initializing", "message": "Loading visualization data..."}
         
-        # Step 1: Load NER entities data
-        self._load_ner_data()
-        
-        # Step 2: Load knowledge graph data
-        if NETWORKX_AVAILABLE:
-            self._load_knowledge_graph()
-        
-        # Step 3: Load embeddings data
-        self._load_embeddings()
-        
-        # Step 4: Load medical datasets for analysis
-        self._load_medical_datasets()
-        
-        print("[VIZ_SERVER] Visualization system ready")
-        self.is_ready = True
-    
-    def _load_ner_data(self):
-        """Load NER entities data from visualizations folder"""
+        # Load NER entities data
         ner_paths = [
-            project_root / "visualizations" / "ner_entities.csv",
-            project_root / "data" / "ner_entities.csv"
+            Path(__file__).parent.parent / "visualizations" / "ner_entities.csv",
+            Path(__file__).parent.parent / "embeddings" / "kg_rag_artifacts" / "ner_entities.csv"
         ]
         
         for ner_path in ner_paths:
             if ner_path.exists():
                 try:
-                    print(f"[VIZ_SERVER] Loading NER data from {ner_path}")
-                    df = pd.read_csv(ner_path)
-                    
-                    # Convert to structured format
-                    for _, row in df.iterrows():
-                        ner_record = {
-                            'text': str(row.iloc[0]) if len(row) > 0 else '',
-                            'label': str(row.iloc[1]) if len(row) > 1 else 'UNKNOWN',
-                            'start': int(row.iloc[2]) if len(row) > 2 and str(row.iloc[2]).isdigit() else 0,
-                            'end': int(row.iloc[3]) if len(row) > 3 and str(row.iloc[3]).isdigit() else len(str(row.iloc[0]))
-                        }
-                        if ner_record['text'] and ner_record['text'] != 'nan':
-                            self.ner_data.append(ner_record)
-                    
-                    print(f"[VIZ_SERVER] Loaded {len(self.ner_data)} NER entities")
-                    return
-                    
+                    ner_data = pd.read_csv(ner_path)
+                    logger.info(f"[VIZ_SERVER] Loaded {len(ner_data)} NER entities from {ner_path}")
+                    break
                 except Exception as e:
-                    print(f"[VIZ_SERVER] Error loading NER data: {e}")
-                    continue
+                    logger.warning(f"[VIZ_SERVER] Error loading NER data from {ner_path}: {e}")
         
-        # Create synthetic NER data from medical datasets
-        print("[VIZ_SERVER] Creating synthetic NER data from medical datasets...")
-        self._create_synthetic_ner_data()
-    
-    def _create_synthetic_ner_data(self):
-        """Create synthetic NER data from available medical data"""
-        # Load medical data to extract entities
-        medical_terms = {
-            'DISEASE': ['fever', 'headache', 'pain', 'nausea', 'infection', 'inflammation', 'allergy'],
-            'MEDICATION': ['paracetamol', 'ibuprofen', 'aspirin', 'antibiotic', 'antacid'],
-            'SYMPTOM': ['cough', 'fatigue', 'dizziness', 'rash', 'vomiting', 'diarrhea'],
-            'BODY_PART': ['head', 'stomach', 'heart', 'liver', 'kidney', 'brain']
+        if ner_data is None:
+            # Create sample NER data
+            ner_data = pd.DataFrame({
+                'entity': ['fever', 'headache', 'nausea', 'fatigue', 'cough', 'pain'],
+                'label': ['SYMPTOM', 'SYMPTOM', 'SYMPTOM', 'SYMPTOM', 'SYMPTOM', 'SYMPTOM'],
+                'frequency': [45, 32, 28, 41, 38, 52]
+            })
+            logger.info("[VIZ_SERVER] Using sample NER data")
+        
+        # Load additional visualization data from drugs database
+        drugs_path = Path(__file__).parent.parent / "data" / "drugs_side_effects.csv"
+        if drugs_path.exists():
+            try:
+                viz_data = pd.read_csv(drugs_path)
+                logger.info(f"[VIZ_SERVER] Loaded {len(viz_data)} drug records for visualization")
+            except Exception as e:
+                logger.warning(f"[VIZ_SERVER] Error loading drug data: {e}")
+        
+        initialization_status = {"status": "ready", "message": "Visualization system ready"}
+        logger.info("[VIZ_SERVER] Visualization system initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Failed to initialize visualization system: {e}")
+        initialization_status = {
+            "status": "error", 
+            "message": f"Failed to initialize: {str(e)}"
         }
-        
-        entity_id = 0
-        for label, terms in medical_terms.items():
-            for term in terms:
-                self.ner_data.append({
-                    'id': entity_id,
-                    'text': term,
-                    'label': label,
-                    'start': 0,
-                    'end': len(term),
-                    'confidence': 0.95
-                })
-                entity_id += 1
-        
-        print(f"[VIZ_SERVER] Created {len(self.ner_data)} synthetic NER entities")
-    
-    def _load_knowledge_graph(self):
-        """Load knowledge graph data"""
-        kg_paths = [
-            project_root / "visualizations" / "medical_kg.graphml",
-            project_root / "embeddings" / "kg_rag_artifacts" / "medical_kg.graphml"
-        ]
-        
-        for kg_path in kg_paths:
-            if kg_path.exists():
-                try:
-                    print(f"[VIZ_SERVER] Loading knowledge graph from {kg_path}")
-                    self.knowledge_graph = nx.read_graphml(kg_path)
-                    print(f"[VIZ_SERVER] Knowledge graph loaded: {self.knowledge_graph.number_of_nodes()} nodes, {self.knowledge_graph.number_of_edges()} edges")
-                    return
-                except Exception as e:
-                    print(f"[VIZ_SERVER] Error loading knowledge graph: {e}")
-                    continue
-        
-        # Create synthetic knowledge graph
-        print("[VIZ_SERVER] Creating synthetic knowledge graph...")
-        self._create_synthetic_knowledge_graph()
-    
-    def _create_synthetic_knowledge_graph(self):
-        """Create synthetic knowledge graph for visualization"""
-        self.knowledge_graph = nx.Graph()
-        
-        # Add nodes and edges for medical concepts
-        medical_concepts = {
-            'diseases': ['Fever', 'Headache', 'Infection', 'Pain'],
-            'medications': ['Paracetamol', 'Ibuprofen', 'Antibiotics'],
-            'symptoms': ['Fatigue', 'Nausea', 'Dizziness'],
-            'body_parts': ['Head', 'Stomach', 'Heart']
-        }
-        
-        # Add nodes
-        for category, concepts in medical_concepts.items():
-            for concept in concepts:
-                self.knowledge_graph.add_node(concept, category=category)
-        
-        # Add relationships
-        relationships = [
-            ('Fever', 'Paracetamol', 'treats'),
-            ('Headache', 'Paracetamol', 'treats'),
-            ('Pain', 'Ibuprofen', 'treats'),
-            ('Infection', 'Antibiotics', 'treats'),
-            ('Fever', 'Fatigue', 'causes'),
-            ('Headache', 'Head', 'affects')
-        ]
-        
-        for source, target, relation in relationships:
-            self.knowledge_graph.add_edge(source, target, relation=relation)
-        
-        print(f"[VIZ_SERVER] Created synthetic KG: {self.knowledge_graph.number_of_nodes()} nodes")
-    
-    def _load_embeddings(self):
-        """Load embeddings data for visualization"""
+
+def generate_embeddings_visualization(method='pca'):
+    """Generate embeddings visualization data"""
+    try:
+        # Try to load actual embeddings
         embedding_paths = [
-            project_root / "embeddings" / "encoded_docs.npy",
-            project_root / "embeddings" / "kg_rag_artifacts" / "corpus_embeddings.npy"
+            Path(__file__).parent.parent / "embeddings" / "encoded_docs.npy",
+            Path(__file__).parent.parent / "embeddings" / "kg_rag_artifacts" / "corpus_embeddings.npy"
         ]
         
+        embeddings = None
         for emb_path in embedding_paths:
             if emb_path.exists():
                 try:
-                    print(f"[VIZ_SERVER] Loading embeddings from {emb_path}")
-                    self.embeddings = np.load(emb_path)
-                    print(f"[VIZ_SERVER] Embeddings loaded: {self.embeddings.shape}")
-                    return
+                    embeddings = np.load(emb_path)
+                    logger.info(f"[VIZ_SERVER] Loaded embeddings from {emb_path}")
+                    break
                 except Exception as e:
-                    print(f"[VIZ_SERVER] Error loading embeddings: {e}")
-                    continue
+                    logger.warning(f"[VIZ_SERVER] Error loading embeddings from {emb_path}: {e}")
         
-        # Create synthetic embeddings
-        print("[VIZ_SERVER] Creating synthetic embeddings...")
-        self.embeddings = np.random.rand(100, 768)  # 100 documents, 768 dimensions
-    
-    def _load_medical_datasets(self):
-        """Load medical datasets for analysis"""
-        data_files = [
-            project_root / "data" / "medquad_processed.csv",
-            project_root / "data" / "drugs_side_effects.csv"
-        ]
+        if embeddings is None:
+            # Generate sample embeddings for visualization
+            embeddings = np.random.rand(100, 384)
+            logger.info("[VIZ_SERVER] Using sample embeddings")
         
-        for data_file in data_files:
-            if data_file.exists():
-                try:
-                    df = pd.read_csv(data_file)
-                    self.medical_data.extend(df.to_dict('records'))
-                except Exception as e:
-                    print(f"[VIZ_SERVER] Error loading {data_file}: {e}")
-        
-        print(f"[VIZ_SERVER] Loaded {len(self.medical_data)} medical records")
-    
-    def get_ner_entities(self, limit=100):
-        """Get NER entities for visualization"""
-        if not self.is_ready:
-            return {"status": "error", "message": "System not ready"}
-        
-        # Group entities by label
-        entity_counts = {}
-        entities_by_type = {}
-        
-        for entity in self.ner_data[:limit]:
-            label = entity['label']
-            entity_counts[label] = entity_counts.get(label, 0) + 1
-            
-            if label not in entities_by_type:
-                entities_by_type[label] = []
-            entities_by_type[label].append(entity)
-        
-        return {
-            "status": "success",
-            "total_entities": len(self.ner_data),
-            "entity_counts": entity_counts,
-            "entities_by_type": entities_by_type,
-            "sample_entities": self.ner_data[:20]
-        }
-    
-    def get_knowledge_graph(self):
-        """Get knowledge graph data for visualization"""
-        if not self.is_ready or not self.knowledge_graph:
-            return {"status": "error", "message": "Knowledge graph not available"}
-        
-        # Convert NetworkX graph to JSON format
-        nodes = []
-        edges = []
-        
-        for node in self.knowledge_graph.nodes(data=True):
-            nodes.append({
-                "id": node[0],
-                "label": node[0],
-                "category": node[1].get('category', 'unknown'),
-                "size": self.knowledge_graph.degree(node[0]) * 10
-            })
-        
-        for edge in self.knowledge_graph.edges(data=True):
-            edges.append({
-                "source": edge[0],
-                "target": edge[1],
-                "relation": edge[2].get('relation', 'related'),
-                "weight": edge[2].get('weight', 1)
-            })
-        
-        return {
-            "status": "success",
-            "nodes": nodes,
-            "edges": edges,
-            "stats": {
-                "total_nodes": len(nodes),
-                "total_edges": len(edges),
-                "node_categories": list(set([n['category'] for n in nodes]))
-            }
-        }
-    
-    def get_embeddings_analysis(self, method='pca'):
-        """Get embeddings analysis for visualization"""
-        if not self.is_ready or self.embeddings is None:
-            return {"status": "error", "message": "Embeddings not available"}
-        
-        if not SKLEARN_AVAILABLE:
-            return {"status": "error", "message": "Scikit-learn not available for analysis"}
-        
-        try:
-            # Limit to first 1000 embeddings for performance
-            embeddings_subset = self.embeddings[:1000]
-            
-            if method == 'pca':
-                reducer = PCA(n_components=2)
-                reduced = reducer.fit_transform(embeddings_subset)
-                explained_variance = reducer.explained_variance_ratio_.tolist()
-            elif method == 'tsne':
-                reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings_subset)-1))
-                reduced = reducer.fit_transform(embeddings_subset)
-                explained_variance = [0.0, 0.0]  # t-SNE doesn't provide explained variance
-            else:
-                return {"status": "error", "message": "Unsupported method"}
-            
-            # Convert to list format for JSON serialization
-            points = []
-            for i, (x, y) in enumerate(reduced):
-                points.append({
-                    "id": i,
-                    "x": float(x),
-                    "y": float(y),
-                    "cluster": int(i % 5)  # Simple clustering for visualization
-                })
-            
-            return {
-                "status": "success",
-                "method": method,
-                "points": points,
-                "explained_variance": explained_variance,
-                "total_points": len(points)
-            }
-            
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    
-    def get_similarity_search(self, query_text, top_k=10):
-        """Perform similarity search in embeddings"""
-        if not self.is_ready or self.embeddings is None:
-            return {"status": "error", "message": "Embeddings not available"}
-        
-        try:
-            # Simple cosine similarity (would need sentence transformer for real implementation)
-            # For now, return random similar documents
-            similar_docs = []
-            for i in range(min(top_k, len(self.medical_data))):
-                similar_docs.append({
-                    "id": i,
-                    "text": str(self.medical_data[i]).get('text', f"Document {i}")[:200],
-                    "similarity": float(np.random.uniform(0.5, 0.95))
-                })
-            
-            # Sort by similarity
-            similar_docs.sort(key=lambda x: x['similarity'], reverse=True)
-            
-            return {
-                "status": "success",
-                "query": query_text,
-                "results": similar_docs
-            }
-            
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-class VisualizationRequestHandler(BaseHTTPRequestHandler):
-    def __init__(self, viz_server, *args, **kwargs):
-        self.viz_server = viz_server
-        super().__init__(*args, **kwargs)
-    
-    def do_GET(self):
-        parsed_path = urlparse(self.path)
-        path = parsed_path.path
-        query_params = parse_qs(parsed_path.query)
-        
-        if path == '/health':
-            health_data = {
-                "service": "Visualization Server",
-                "status": "ready" if self.viz_server.is_ready else "initializing",
-                "ner_entities": len(self.viz_server.ner_data),
-                "knowledge_graph": self.viz_server.knowledge_graph is not None,
-                "embeddings": self.viz_server.embeddings is not None,
-                "medical_records": len(self.viz_server.medical_data)
-            }
-            self._send_json_response(health_data)
-            
-        elif path == '/ner':
-            limit = int(query_params.get('limit', [100])[0])
-            result = self.viz_server.get_ner_entities(limit)
-            self._send_json_response(result)
-            
-        elif path == '/knowledge-graph':
-            result = self.viz_server.get_knowledge_graph()
-            self._send_json_response(result)
-            
-        elif path == '/embeddings':
-            method = query_params.get('method', ['pca'])[0]
-            result = self.viz_server.get_embeddings_analysis(method)
-            self._send_json_response(result)
-            
-        else:
-            self._send_error(404, "Not found")
-    
-    def do_POST(self):
-        if self.path == '/similarity':
+        # Reduce dimensionality for visualization
+        if method == 'pca':
             try:
-                content_length = int(self.headers['Content-Length'])
-                post_data = self.rfile.read(content_length)
-                data = json.loads(post_data.decode('utf-8'))
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=2)
+                reduced_embeddings = pca.fit_transform(embeddings[:100])  # Limit for performance
+            except ImportError:
+                # Fallback: use first two dimensions
+                reduced_embeddings = embeddings[:100, :2]
+        else:
+            # Default: use first two dimensions
+            reduced_embeddings = embeddings[:100, :2]
+        
+        # Create visualization data
+        viz_points = []
+        for i, (x, y) in enumerate(reduced_embeddings):
+            viz_points.append({
+                'id': i,
+                'x': float(x),
+                'y': float(y),
+                'label': f'Document {i+1}'
+            })
+        
+        return viz_points
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error generating embeddings visualization: {e}")
+        return []
+
+def generate_knowledge_graph_data():
+    """Generate knowledge graph visualization data"""
+    try:
+        # Try to load actual knowledge graph
+        kg_path = Path(__file__).parent.parent / "visualizations" / "medical_kg.graphml"
+        
+        if kg_path.exists():
+            try:
+                import networkx as nx
+                G = nx.read_graphml(kg_path)
                 
-                query_text = data.get('query', '')
-                top_k = data.get('top_k', 10)
+                nodes = []
+                edges = []
                 
-                if not query_text:
-                    self._send_error(400, "Query text is required")
-                    return
+                # Convert to JSON format (limit for performance)
+                for node in list(G.nodes())[:50]:  # Limit nodes for performance
+                    node_data = G.nodes[node]
+                    nodes.append({
+                        'id': node,
+                        'label': node_data.get('label', node),
+                        'type': node_data.get('type', 'unknown')
+                    })
                 
-                result = self.viz_server.get_similarity_search(query_text, top_k)
-                self._send_json_response(result)
+                for edge in list(G.edges())[:100]:  # Limit edges for performance
+                    edge_data = G.edges[edge]
+                    edges.append({
+                        'source': edge[0],
+                        'target': edge[1],
+                        'relation': edge_data.get('relation', 'related')
+                    })
+                
+                return {'nodes': nodes, 'edges': edges}
                 
             except Exception as e:
-                self._send_error(500, str(e))
-        else:
-            self._send_error(404, "Not found")
-    
-    def _send_json_response(self, data):
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
-    
-    def _send_error(self, code, message):
-        self.send_response(code)
-        self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        error_data = {"error": message, "code": code}
-        self.wfile.write(json.dumps(error_data).encode('utf-8'))
-    
-    def log_message(self, format, *args):
-        # Suppress default HTTP server logging
-        pass
+                logger.warning(f"[VIZ_SERVER] Error loading knowledge graph: {e}")
+        
+        # Fallback: create sample knowledge graph
+        nodes = [
+            {'id': 'fever', 'label': 'Fever', 'type': 'symptom'},
+            {'id': 'paracetamol', 'label': 'Paracetamol', 'type': 'drug'},
+            {'id': 'headache', 'label': 'Headache', 'type': 'symptom'},
+            {'id': 'ibuprofen', 'label': 'Ibuprofen', 'type': 'drug'},
+            {'id': 'nausea', 'label': 'Nausea', 'type': 'symptom'}
+        ]
+        
+        edges = [
+            {'source': 'fever', 'target': 'paracetamol', 'relation': 'treated_by'},
+            {'source': 'headache', 'target': 'paracetamol', 'relation': 'treated_by'},
+            {'source': 'headache', 'target': 'ibuprofen', 'relation': 'treated_by'},
+            {'source': 'paracetamol', 'target': 'nausea', 'relation': 'may_cause'}
+        ]
+        
+        return {'nodes': nodes, 'edges': edges}
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error generating knowledge graph: {e}")
+        return {'nodes': [], 'edges': []}
 
-def main():
-    port = int(os.getenv('VIZ_SERVER_PORT', 5003))
-    
-    print(f"[VIZ_SERVER] Initializing Visualization Server on port {port}...")
-    viz_server = VisualizationServer(port)
-    
-    # Create HTTP server
-    handler = lambda *args, **kwargs: VisualizationRequestHandler(viz_server, *args, **kwargs)
-    httpd = HTTPServer(('localhost', port), handler)
-    
-    print(f"[VIZ_SERVER] Visualization Server ready on http://localhost:{port}")
-    print(f"[VIZ_SERVER] Endpoints: /health, /ner, /knowledge-graph, /embeddings, /similarity")
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": initialization_status["status"],
+        "message": initialization_status["message"],
+        "service": "Visualization Server",
+        "port": int(os.getenv('VIZ_SERVER_PORT', 5003)),
+        "ner_entities": len(ner_data) if ner_data is not None else 0,
+        "viz_records": len(viz_data) if viz_data is not None else 0,
+        "timestamp": time.time()
+    })
+
+@app.route('/ner', methods=['GET'])
+def get_ner_entities():
+    """Get NER entities for visualization"""
+    if initialization_status["status"] != "ready":
+        return jsonify({
+            "status": "error",
+            "message": "Visualization system not ready yet",
+            "initialization_status": initialization_status
+        }), 503
     
     try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("[VIZ_SERVER] Shutting down visualization server...")
-        httpd.shutdown()
+        limit = int(request.args.get('limit', 100))
+        
+        if ner_data is None or ner_data.empty:
+            return jsonify({
+                "status": "error",
+                "message": "No NER data available"
+            }), 404
+        
+        # Get top entities by frequency or first N entities
+        if 'frequency' in ner_data.columns:
+            top_entities = ner_data.nlargest(limit, 'frequency')
+        else:
+            top_entities = ner_data.head(limit)
+        
+        entities = top_entities.to_dict('records')
+        
+        return jsonify({
+            "status": "success",
+            "entities": entities,
+            "total_entities": len(ner_data),
+            "returned_count": len(entities),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error getting NER entities: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Error retrieving NER entities: {str(e)}"
+        }), 500
 
-if __name__ == "__main__":
+@app.route('/knowledge-graph', methods=['GET'])
+def get_knowledge_graph():
+    """Get knowledge graph data for visualization"""
+    if initialization_status["status"] != "ready":
+        return jsonify({
+            "status": "error",
+            "message": "Visualization system not ready yet",
+            "initialization_status": initialization_status
+        }), 503
+    
+    try:
+        kg_data = generate_knowledge_graph_data()
+        
+        return jsonify({
+            "status": "success",
+            "graph": kg_data,
+            "node_count": len(kg_data.get('nodes', [])),
+            "edge_count": len(kg_data.get('edges', [])),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error getting knowledge graph: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Error retrieving knowledge graph: {str(e)}"
+        }), 500
+
+@app.route('/embeddings', methods=['GET'])
+def get_embeddings_visualization():
+    """Get embeddings visualization data"""
+    if initialization_status["status"] != "ready":
+        return jsonify({
+            "status": "error",
+            "message": "Visualization system not ready yet",
+            "initialization_status": initialization_status
+        }), 503
+    
+    try:
+        method = request.args.get('method', 'pca')
+        
+        embeddings_data = generate_embeddings_visualization(method)
+        
+        return jsonify({
+            "status": "success",
+            "embeddings": embeddings_data,
+            "method": method,
+            "point_count": len(embeddings_data),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error getting embeddings visualization: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Error generating embeddings visualization: {str(e)}"
+        }), 500
+
+@app.route('/similarity', methods=['POST'])
+def similarity_search():
+    """Perform similarity search for visualization"""
+    if initialization_status["status"] != "ready":
+        return jsonify({
+            "status": "error",
+            "message": "Visualization system not ready yet",
+            "initialization_status": initialization_status
+        }), 503
+    
+    try:
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({
+                "status": "error",
+                "message": "Query is required"
+            }), 400
+        
+        query = data['query']
+        top_k = data.get('top_k', 10)
+        
+        # Simple similarity search using drug data
+        if viz_data is not None and not viz_data.empty:
+            results = []
+            query_lower = query.lower()
+            
+            for idx, row in viz_data.iterrows():
+                score = 0
+                
+                # Check similarity in drug names and conditions
+                for col in ['drug_name', 'medical_condition', 'side_effects']:
+                    if col in row and query_lower in str(row[col]).lower():
+                        score += 1
+                
+                if score > 0:
+                    results.append({
+                        'drug_name': row.get('drug_name', 'Unknown'),
+                        'medical_condition': row.get('medical_condition', 'Not specified'),
+                        'similarity_score': score / 3.0,  # Normalize
+                        'index': idx
+                    })
+            
+            # Sort by similarity score
+            results.sort(key=lambda x: x['similarity_score'], reverse=True)
+            results = results[:top_k]
+        else:
+            results = []
+        
+        return jsonify({
+            "status": "success",
+            "query": query,
+            "results": results,
+            "total_found": len(results),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Error in similarity search: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Error in similarity search: {str(e)}"
+        }), 500
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Get detailed status information"""
+    return jsonify({
+        "service": "Medical Visualization Server",
+        "version": "1.0.0",
+        "initialization_status": initialization_status,
+        "data_loaded": {
+            "ner_entities": ner_data is not None,
+            "visualization_data": viz_data is not None
+        },
+        "endpoints": {
+            "health": "GET /health",
+            "ner": "GET /ner?limit=100",
+            "knowledge_graph": "GET /knowledge-graph",
+            "embeddings": "GET /embeddings?method=pca",
+            "similarity": "POST /similarity",
+            "status": "GET /status"
+        },
+        "data_sources": {
+            "ner_entities": str(Path(__file__).parent.parent / "visualizations" / "ner_entities.csv"),
+            "drug_database": str(Path(__file__).parent.parent / "data" / "drugs_side_effects.csv"),
+            "knowledge_graph": str(Path(__file__).parent.parent / "visualizations" / "medical_kg.graphml")
+        }
+    })
+
+def main():
+    """Main entry point"""
+    port = int(os.getenv('VIZ_SERVER_PORT', 5003))
+    
+    # Start visualization system initialization in background
+    init_thread = threading.Thread(target=initialize_visualization_system, daemon=True)
+    init_thread.start()
+    
+    logger.info(f"[VIZ_SERVER] Starting visualization server on port {port}")
+    logger.info(f"[VIZ_SERVER] Health check: http://localhost:{port}/health")
+    logger.info(f"[VIZ_SERVER] NER endpoint: http://localhost:{port}/ner")
+    logger.info(f"[VIZ_SERVER] Knowledge graph: http://localhost:{port}/knowledge-graph")
+    logger.info(f"[VIZ_SERVER] Embeddings: http://localhost:{port}/embeddings")
+    
+    try:
+        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    except Exception as e:
+        logger.error(f"[VIZ_SERVER] Failed to start server: {e}")
+        sys.exit(1)
+
+if __name__ == '__main__':
     main()
