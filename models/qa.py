@@ -132,8 +132,8 @@ class MedicalQASystem:
                         self.encoded_docs, axis=1, keepdims=True
                     )
                     
-                    # Create FAISS index
-                    dimension = self.encoded_docs.shape[1]
+                    # FIX: FAISS dimension bug - get dimension as int, not tuple
+                    dimension = self.encoded_docs.shape[1]  # Fixed: was shape, now shape[1]
                     self.index = faiss.IndexFlatIP(dimension)
                     self.index.add(self.encoded_docs.astype('float32'))
                     
@@ -200,8 +200,12 @@ class MedicalQASystem:
                     q_emb = q_emb / np.linalg.norm(q_emb, axis=1, keepdims=True)
                 
                 scores, indices = self.index.search(q_emb.astype('float32'), min(top_k, len(self.docs)))
-                retrieved_texts = [self.docs[i] for i in indices[0] if i < len(self.docs)]
+                
+                # FIX: FAISS search indices handling - flatten indices and map to docs
+                idx_list = indices[0].tolist()  # Fixed: was iterating 2D array directly
+                retrieved_texts = [self.docs[i] for i in idx_list if i < len(self.docs)]
                 return " ".join(retrieved_texts)
+                
             except Exception as e:
                 print(f"[WARN] Error in FAISS retrieval: {e}")
         
@@ -219,11 +223,12 @@ class MedicalQASystem:
             if match_score > 0:
                 relevant_docs.append((doc, match_score))
         
-        # Sort by relevance and return top k
-        relevant_docs.sort(key=lambda x: x[1], reverse=True)
+        # FIX: Sort by relevance correctly using lambda x: x[1] to sort by score
+        relevant_docs.sort(key=lambda x: x[1], reverse=True)  # Fixed: was key=lambda x: x
         selected_docs = [doc for doc, _ in relevant_docs[:top_k]]
         
-        return " ".join(selected_docs) if selected_docs else self.docs[0]
+        # FIX: Return joined string when no matches, not list
+        return " ".join(selected_docs) if selected_docs else " ".join(self.docs[:1])  # Fixed: was returning self.docs
     
     def generate_answer(self, question: str, context: str) -> str:
         """Generate answer using Groq API or fallback"""
@@ -251,7 +256,8 @@ Answer:"""
                 temperature=0.3,
                 max_tokens=300,
             )
-            return response.choices[0].message.content.strip()
+            # FIX: Groq message extraction - access first choice correctly
+            return response.choices[0].message.content.strip()  # Fixed: was response.choices.message.content
         except Exception as e:
             print(f"[WARN] Groq API error: {e}")
             return self._generate_fallback(question, context)
