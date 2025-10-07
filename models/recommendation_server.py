@@ -19,12 +19,18 @@ import re
 # Add current directory to path to import medical_v3.py
 sys.path.append(str(Path(__file__).parent))
 
+# Try to import from fixed version first, then fallback to original
 try:
-    from medical_v3 import answer_via_kg_and_semantics, run_api_mode
-except ImportError as e:
-    print(f"[ERROR] Could not import medical_v3 system: {e}")
-    answer_via_kg_and_semantics = None
-    run_api_mode = None
+    from medical_v3_fixed import answer_via_kg_and_semantics, run_api_mode
+    print("[INFO] Using fixed medical_v3_fixed module")
+except ImportError:
+    try:
+        from medical_v3 import answer_via_kg_and_semantics, run_api_mode
+        print("[INFO] Using original medical_v3 module")
+    except ImportError as e:
+        print(f"[ERROR] Could not import medical_v3 system: {e}")
+        answer_via_kg_and_semantics = None
+        run_api_mode = None
 
 app = Flask(__name__)
 CORS(app)
@@ -245,7 +251,8 @@ def recommend_medicines():
                 ai_data = json.loads(ai_result)
                 if ai_data.get('status') == 'success':
                     ai_advice = ai_data.get('answer')
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[REC_SERVER] AI advice generation failed: {e}")
                 pass  # AI advice is optional
         
         return jsonify({
@@ -274,6 +281,7 @@ def get_status():
         "initialization_status": initialization_status,
         "drug_database_loaded": drugs_data is not None,
         "drug_records_count": len(drugs_data) if drugs_data is not None else 0,
+        "ai_module_available": run_api_mode is not None,
         "endpoints": {
             "health": "GET /health",
             "search": "GET /search?q=query&limit=10",
